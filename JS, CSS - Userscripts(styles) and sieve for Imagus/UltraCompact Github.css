@@ -1,0 +1,141 @@
+/* ==UserStyle==
+@name           UltraCompact Github
+@namespace      github.com/openstyles/stylus
+@version        1.0.0
+@description    More Information Density!
+@author         Ranhum
+==/UserStyle== */
+
+@-moz-document domain("github.com") {
+    .footer {
+        display: none !important;
+    }
+    .TimelineItem {
+        padding: 2px 0 !important;
+    }
+    .timeline-comment-header-text,
+    .timeline-comment-action {
+        padding-top: 0px !important;
+        padding-bottom: 0px !important;
+        border-top-width: 0px !important;
+        margin-bottom: 0px !important;
+    }
+    .comment-body {
+        padding-top: 5px !important;
+        padding-bottom: 5px !important;
+    }
+    @media (min-width: 768px) {
+        .page-responsive .timeline-comment--caret::after,
+        .page-responsive .timeline-comment--caret::before {
+            top: 4px !important;
+        }
+    }
+    .Header {
+        padding-top: 6px !important;
+        padding-bottom: 6px !important;
+    }
+    #partial-discussion-header,
+    .gh-header-meta,
+    .gh-header-title {
+        padding-bottom: 0px !important;
+        margin-bottom: 0px !important;
+    }
+    .TableObject {
+        margin-top: 6px !important;
+        margin-bottom: 0px !important;
+        padding-bottom: 0px !important;
+    }
+    .js-repo-nav a {
+        padding: 0px 10px !important;
+    }
+    div.mb-5,
+    div.mb-5 > div.mb-3 {
+        margin-bottom: 0px !important;
+        padding-top: 0px !important;
+    }
+    .tabnav-pr {
+        margin-top: 0px !important;
+        margin-bottom: 8px !important;
+    }
+    .tabnav-tab {
+        padding: 0px !important;
+    }
+    /*assets and merge status*/
+    .merge-status-item,
+    .branch-action-item {
+        padding: 0 0 0 55px !important;
+    }
+    .merge-message, .social-count {
+        padding: 0 !important;
+    }
+    .merge-status-list {
+        margin: 0 0 !important;
+    }
+    .branch-action-item-icon {
+        margin-top: 6px !important;
+    }
+    /*notifications v2 interface*/
+    main#js-repo-pjax-container.d-flex {
+        margin-top: -12px !important;
+    }
+    .Header-item a,
+    .Header,
+    .filter-list a,
+    .py-2, .Box-header,
+    .p-2, .px-2, .btn-sm,
+    .pl-3
+    {
+        padding: 0 0 !important;
+    }
+    .Box {
+        margin-top: 2px !important;
+    }
+    .f6.m-0,
+    .Label.ml-2 {
+        display: none !important;
+    }
+    hr {
+        margin: revert !important;
+    }
+    .Box-header {
+        padding-left: 8px !important;
+    }
+    .btn-sm {
+        margin-right: 2px !important;
+    }
+    .pl-2 .p-2,
+    .Label{
+        margin: 0px 3px !important;
+    }
+    .notification-list-item-hide-on-hover {
+        width: 100px !important;
+        margin: 0 0 !important;
+    }
+    .pl-md-0 {
+        height: 26px !important;
+    }
+    .pl-md-4 {
+        padding-left: 12px !important;
+    }
+    .filter-item {
+        margin-bottom: 0 !important;
+    }
+    /*js-notification-top-shelf when from notifications v2*/
+    .js-notification-top-shelf {
+        padding: 0 16px !important;
+    }
+    /*for inbuilt dark theme*/
+    .pt-3 {
+        padding-top: 0px !important;
+        margin-top: 12px !important;
+    }
+    .mb-3, .mb-md-3 {
+        margin-bottom: 0px !important;
+    }
+    .TimelineItem-break {
+        z-index: 0 !important;
+    }
+    .h-card > .flex-column {
+        margin-top: 20px !important;
+    }
+}
