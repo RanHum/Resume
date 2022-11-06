@@ -1,0 +1,76 @@
+//Client
+
+{
+    "log": {
+        "loglevel": "warning",
+        //"access":   "client_access.log",
+        "error":    "client_error.log"
+    },
+    "inbounds": [
+        {
+            "port": 25564,
+            "listen": "127.0.0.1",
+            "protocol": "dokodemo-door",
+            "settings": {
+                "address": "127.0.0.1",
+                "port": 25564,
+                "network": "tcp",
+                "followRedirect": false,
+                "userLevel": 0
+            },
+            "allocate": {
+                "strategy": "always"
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "protocol": "vmess",
+            "settings": {
+                "vnext": [
+                    {
+                        "address": "61.48.209.124",
+                        "port": 9000,
+                        "users": [
+                            {
+                                "id": "078959b8-4fec-4821-b43e-04a44f0b82e2",
+                                "alterId": 32,
+                                "security": "auto",
+                                "level": 0
+                            }
+                        ]
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "kcp",
+                "security": "none",
+                "kcpSettings": {
+                    "mtu": 1350,
+                    "tti": 50,
+                    "uplinkCapacity": 3,
+                    "downlinkCapacity": 3,
+                    "congestion": true,
+                    "readBufferSize": 2,
+                    "writeBufferSize": 2,
+                    "header": {
+                        "type": "utp"
+                    }
+                }
+            }
+        }
+    ],
+    "policy": {
+        "levels": {
+            "0": {
+                "handshake"         : 4,
+                "connIdle"          : 300,
+                "uplinkOnly"        : 5,
+                "downlinkOnly"      : 5,
+                "statsUserUplink"   : false,
+                "statsUserDownlink" : false,
+                "bufferSize"        : 1024
+            }
+        }
+    }
+}

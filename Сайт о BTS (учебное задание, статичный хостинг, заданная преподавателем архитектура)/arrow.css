@@ -1,0 +1,32 @@
+.arrow {
+	width: 3em;
+	height: 3em;
+	border: 1em solid;
+	border-color: black transparent transparent black;
+	transform: rotate(-45deg);
+}
+
+.arrowSliding {
+	position: absolute;
+	-webkit-animation: slide 2s linear infinite;
+	animation: slide 2s linear infinite;
+}
+
+@keyframes slide {
+	0% {
+		opacity: 0;
+		transform: translateX(3em);
+	}
+	20% {
+		opacity: 1;
+		transform: translateX(2em);
+	}
+	80% {
+		opacity: 1;
+		transform: translateX(-2em);
+	}
+	100% {
+		opacity: 0;
+		transform: translateX(-3em);
+	}
+}

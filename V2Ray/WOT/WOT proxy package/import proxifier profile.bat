@@ -1,0 +1,1 @@
+copy /Y Default.ppx "%appdata%\Proxifier\Profiles\Default.ppx"

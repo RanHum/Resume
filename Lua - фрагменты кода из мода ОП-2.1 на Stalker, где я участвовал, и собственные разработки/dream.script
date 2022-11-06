@@ -1,0 +1,479 @@
+---------------------------------------
+--    Dream for OP-2.1 by RanHum     --
+-- based on DreamMod v0.2 by Ab@dDon --
+--       and AMK sleep scripts       --
+---------------------------------------
+
+class "CDream"
+
+function CDream:__init()
+	-- Служебные вызовы и переменные
+	self.dream_time = 0
+	self.sleep_time = 0
+	self.actor_is_sleeping = false
+	self:init_dreams() -- Импорт снов, функция от ПЫС'а Oleg "Haron" Kreptul, haronk@ukr.net, 2005
+
+	-- Секции настойки
+	self.energy_drink_limit		= 3 -- Макс. кол-во энергетиков, которое увеличивает время бодрствования
+	self.energy_drink_endurance	= 60 -- Время в минутах, которое добавляет каждый энергетик к ограничению сна
+
+	self.vodka_limit		= 5 -- Макс. кол-во водки, которое увеличивает время сна
+	self.vodka_effect_time	= 10 -- Время в минутах, в течение которого водка дает свой эффект (от последней выпитой, неважно, до лимита, или после)
+
+	self.enemy_dist			= 40 -- Макс. расстояние, на котором считается видящий игрока противник
+	self.controller_dist	= 100 -- Макс. расстояние, на котором считается живой контроллёр
+
+	self.sleep_proportion	= 0.75 -- Соотношение бодрствование/сон
+
+	self.wait_limit			= 6 -- Макс. количество дрем подряд (каждая следующая началась менее чем через wait_refill_time)
+	self.wait_refill_time	= 10 -- Время в минутах, после которого сбрасывается число дрем подряд
+	self.wait_on_limit_time	= 60 -- Время в минутах, на которое блокируется возможность дремать при достижении wait_limit
+
+	self.buttons_config = {
+		{text = " час",		value = 1, NotShow = true}, -- !!!! Убрал эту кнопку, поскольку она не вписывается в модель. Впрочем, всегда можно изменить шаги сна и ее задействовать
+		{text = " часа",	value = 3},
+		{text = " часов",	value = 5},
+		{text = " часов",	value = 8},
+		{text = " минут",	value = 10}
+	}
+	self.text = {
+		conditions = {
+			enemy		= "враги",
+			controller	= "контроллёр",
+			ambush		= "опасность", -- !!!! Надо поработать над текстом
+			blowout		= "выброс",
+			horror_time	= "час ужаса"
+		},
+		info_Warning = {
+			can		= "Приятных сновидений",
+			cant	= "Заснуть у Вас не получится...",
+			danger	= "Не спать:" -- !!!! Надо поработать над текстом
+		},
+		info_Sleep = {
+			can				= "Меченый совсем не прочь поспать",
+			cant			= "Больше совсем не хочется спать.Надо подождать %i:%i",
+			add_energy_drink= "\nЭнергетик потребовал еще +%i к часам бодрствования",
+			add_vodka		= "\nВодка дала +%i к часам сна, эффект продлится еще %i минут"
+		},
+		info_Wait = {
+			cant		= "Больше совсем не хочется отдыхать. Надо подождать %i минут",
+			can			= "Вы можете вздремнуть %i раз по %i минут",
+			add_refill	= "\nСчетчик пополнится через %i минут"
+		}
+	}
+end
+
+-- Функция возвращает таблицу с полной информацией о возможностях сна ГГ на данный момент
+function CDream:get_state()
+	local state = {
+		can_sleep_in_safe	= has_info("snp_shadows_start") and not has_info("snp_shadows_done"),
+		vodka				= amk.load_variable("sleep_vodka", 0),
+		cant_sleep_timer	= amk.get_timer("cant_sleep", nil),
+		cant_wait_timer		= amk.get_timer("cant_wait", nil),
+		wait_timer			= amk.get_timer("wait", nil),
+		vodka_timer			= amk.get_timer("sleep_vodka", nil),
+		wait_count			= amk.load_variable("wait_count", 0),
+		energy_drink		= amk.load_variable("energy_drink", 0),
+		danger				= false,
+		can_sleep			= true,
+		can_wait			= true,
+		info_Warning		= self.text.info_Warning.danger,
+		info_Sleep			= self.text.info_Sleep.can,
+		info_Wait			= "",
+		buttons				= {},
+		conditions			= {
+			enemy		= false,
+			controller	= false,
+			ambush		=	(has_info("angar_kulinar")			and not has_info("angar_kulinar_have"))
+						or	(has_info("hamster_kuznec2_spawn")	and not has_info("hamster_kuznec2_have"))
+						or	(has_info("volna_sak_battle")		and not has_info("volna_sak_have"))
+						or	(has_info("merc_turret_spawn")		and not has_info("merc_turret_have")),
+			horror_time	=	 has_info("horror_time_begin")		and not has_info("horror_fail"),
+			blowout		= (amk.load_variable("blowout",-1) > -1) and (amk.load_variable("blowout",-1) < 5)
+		}
+	}
+
+	-- Проверка на врагов и контроллеров поблизости
+	for id,obj in pairs(db.creatures) do
+		if obj and id ~= db.actor:id() then
+			if ((obj:is_stalker() and obj:relation(db.actor) == game_object.enemy) or obj:is_monster()) and obj:alive() then
+				-- Здесь мы не считаем контроллера в числе обычных врагов (если есть только он, глупо выводить несуществующих "других врагов") за счет elseif
+				if not state.conditions.controller and (obj:clsid() == clsid.controller_s or obj:clsid() == clsid.controller) and distance_between(obj, db.actor) < self.controller_dist then
+					state.conditions.controller = true
+					if state.conditions.enemy then break end
+				elseif not state.conditions.enemy and distance_between(obj, db.actor) < self.enemy_dist and obj:see(db.actor) then
+					state.conditions.enemy = true
+					if state.conditions.controller then break end
+				end
+			end
+		end
+	end
+	-- Проверка и перечисление всех внешних угроз в инфо-поле
+	for condition, flag in pairs(state.conditions) do
+		if flag then
+			state.info_Warning = state.info_Warning .. ", " .. self.text.conditions[condition]
+			state.danger = true
+		end
+	end
+
+	state.can_sleep		= not state.cant_sleep_timer	or state.can_sleep_in_safe or db.debug_mode
+	state.can_wait		= not state.cant_wait_timer		or state.can_sleep_in_safe or db.debug_mode
+
+	-- Окончательное формирование оповещательного инфо-поля
+	if state.danger then
+		state.info_Warning = string.gsub(state.info_Warning, ":,", ":")
+	elseif state.can_sleep or state.can_wait then
+		state.info_Warning = self.text.info_Warning.can
+	else
+		state.info_Warning = self.text.info_Warning.cant
+	end
+
+	-- Формирование инфо-поля сна
+	if state.cant_sleep_timer then
+		local time = amk.format_time(amk.estimated_game_time(state.cant_sleep_timer[2]), "hours")
+		state.info_Sleep = string.format(self.text.info_Sleep.cant, time.hours, time.minutes)
+		if state.energy_drink > 0 then
+			state.info_Sleep = state.info_Sleep .. string.format(self.text.info_Sleep.add_energy_drink, state.energy_drink)
+		end
+	end
+	if state.vodka_timer then
+		local time = amk.format_time(amk.estimated_game_time(state.vodka_timer[2]), "minutes")
+		state.info_Sleep = state.info_Sleep .. string.format(self.text.info_Sleep.add_vodka, state.vodka, time.minutes)
+	end
+
+	-- Формирование инфо-поля дрёмы
+	if state.cant_wait_timer then
+		local time = amk.format_time(amk.estimated_game_time(state.cant_wait_timer[2]), "minutes")
+		state.info_Wait = string.format(self.text.info_Wait.cant, time.minutes)
+	else
+		state.info_Wait = string.format(self.text.info_Wait.can, self.wait_limit - state.wait_count, self.buttons_config[5].value)
+		if state.wait_timer then
+			local time = amk.format_time(amk.estimated_game_time(state.wait_timer[2]), "minutes")
+			state.info_Wait = state.info_Wait .. string.format(self.text.info_Wait.add_refill, time.minutes)
+		end
+	end
+
+	-- Расширенные надписи на кнопках и кастомное время сна на них
+	for i, _button in pairs(self.buttons_config) do
+		local new_button = {}
+		if i ~= 5 then
+			new_button.text		= "Спать " .. iif(state.vodka > 0, string.format("%i (%i + %i)", _button.value + state.vodka, _button.value, state.vodka), _button.value) .. _button.text
+			new_button.value		= _button.value + state.vodka
+			new_button.disabled	= not state.can_sleep or state.danger
+		else
+			new_button.text		= "Вздремнуть " .. _button.value .. _button.text
+			new_button.value		= _button.value
+			new_button.disabled	= not state.can_wait or state.danger
+		end
+		new_button.NotShow	= _button.NotShow
+
+		state.buttons[i] = new_button
+	end
+
+	return state
+end
+
+function CDream:check_sleep_item(obj)
+	local section = obj:section()
+	if section == "energy_drink" then
+		self:energy_drink()
+	elseif section == "vodka" then
+		self:vodka()
+	elseif section == "matras" then
+		got_item("matras")
+		say("zwuk\\inv_sleeping")
+		level.start_stop_menu(ui_matras.Matras(hud), true)
+	end
+end
+
+-- Влияние энергетика на сон
+function CDream:energy_drink()
+	local count = amk.load_variable("energy_drink", 0)
+	-- Если серия энергетиков еще не закончилась
+	if count < self.energy_drink_limit then
+		amk.save_variable("energy_drink", count + 1)
+		--Перезапускаем таймер запрета сна с добавлением еще одного часа
+		local time = amk.get_timer("cant_sleep", {[2] = amk.game_milliseconds()})[2]
+		amk.remove_timer("cant_sleep")
+		amk.g_start_timer("cant_sleep", 0, 0, self.energy_drink_endurance + amk.estimated_game_time(time) / 60000, nil)
+	end
+end
+
+-- Влияние водки на сон
+function CDream:vodka()
+	local count = amk.load_variable("sleep_vodka", 0)
+	-- Если серия пузырей еще не закончилась
+	if count < self.vodka_limit then
+		amk.save_variable("sleep_vodka", count + 1)
+	end
+	-- Перезапускаем таймер водки в любом случае, ибо пост-эффекты длятся по последней
+	amk.remove_timer("sleep_vodka")
+	amk.g_start_timer("sleep_vodka", 0, 0, self.vodka_effect_time, nil)
+end
+
+function CDream:sleep(scale) -- Время сна в часах
+	amk.save_variable("energy_drink", 0)
+	-- Запускаем таймер сразу, все тайминги известны, чего тянуть
+	amk.g_start_timer("cant_sleep", 0, scale * (1 + self.sleep_proportion), 0, false)
+	self:main(scale)
+end
+
+function CDream:wait(scale) -- Время дремы в минутах
+	local count = amk.load_variable("wait_count", 0) + 1
+	amk.save_variable("wait_count", count)
+	amk.save_variable("sleep_vodka", 0)
+	amk.remove_timer("sleep_vodka")
+	amk.remove_timer("wait")
+	-- Запускаем таймеры сразу, все тайминги известны, чего тянуть
+	if count == self.wait_limit then
+		amk.g_start_timer("cant_wait"	, 0, 0, scale + self.wait_on_limit_time, nil)
+	else
+		amk.g_start_timer("wait"		, 0, 0, scale + self.wait_refill_time, nil)
+	end
+	self:main(scale/60)
+end
+
+function CDream:main(scale)
+	-- Записываем все времена
+	self.dream_time = scale
+	if db.actor.no_load_time then
+		sleep_time = amk.game_minutes()
+		db.actor.no_load_time_sleep = db.actor.no_load_time
+		db.actor.no_load_time = nil
+	end
+	if scale > 1 then
+		-- Кормим гг перед сном
+		kostya_dialog.feed_actor()
+	end
+	db.actor:stop_talk()
+	level.disable_input()
+	self:hp_corrector(scale)
+	self.actor_is_sleeping = true
+	game.start_tutorial("time_scaling")
+	level.add_pp_effector("teleport.ppe", 2006, false)
+	level.set_time_factor(scale * 2650)
+end
+
+function CDream:dreamer()
+	level.set_time_factor(config:r_float("alife","time_factor"))
+	if self:is_sleep_active() then
+		self:hp_corrector()
+		game.start_tutorial(self:get_dream()) -- Проигрывание случайного сна, функция от ПЫС'а Oleg "Haron" Kreptul, haronk@ukr.net, 2005
+	end
+end
+
+function CDream:stopper()
+	if not self:is_sleep_active() then return end
+
+	level.set_time_factor(config:r_float("alife","time_factor"))
+
+	self.actor_is_sleeping = false
+
+	if db.actor:alive() then
+		level.add_cam_effector("camera_effects\\prison_1.anm", 25, false, "")
+		level.add_pp_effector("yantar_underground_psi.ppe", 2007, false)
+		level.add_pp_effector("total_recall.ppe", 2008, false)
+		say([[characters_voice\human_01\stalker\states\breath\breath_2]])
+		level.add_cam_effector("camera_effects\\hit_back_left.anm", 26, false, "")
+
+		archievements.acv_count_event("acv_slp", 2928, "Засоня", dream_time)
+		if db.actor.no_load_time_sleep then
+			db.actor.no_load_time = db.actor.no_load_time_sleep + amk.game_minutes() - sleep_time
+			db.actor.no_load_time_sleep = nil
+		end
+	end
+	level.enable_input()
+end
+
+function CDream:init_dreams()
+	--log("dream <init>: START INITIALIZATION")
+
+	local ini = ini_file("misc\\dream.ltx")
+	self.regular = nil
+	self.scenario = {}
+	self.type = "all"
+	self.dream_types = {all = 2}
+	local def_global_regular_probability = 80
+	local def_regular_type = "normal"
+	local def_regular_probability = 2
+
+	if ini:section_exist("dreams") then
+		self.regular_probability = def_global_regular_probability
+		if ini:line_exist("dreams", "regular_probability") then
+			local rp = ini:r_float("dreams", "regular_probability")
+			if rp >= 0 or rp <= 100 then
+				self.regular_probability = rp
+			end
+		end
+		if ini:line_exist("dreams", "dream_types") then
+			local rt_str = ini:r_string("dreams", "dream_types")
+			if rt_str then
+				for rt in string.gfind(rt_str, "([%w_]+)") do
+					self.dream_types[rt] = 1
+				end
+			end
+		end
+		if ini:line_exist("dreams", "regular") then
+			self.regular = {}
+			local rd_str = ini:r_string("dreams", "regular")
+
+			if rd_str then
+				for rd_sect in string.gfind(rd_str, "([%w_]+)") do
+					if ini:section_exist(rd_sect) then
+						if ini:line_exist(rd_sect, "dream") then
+							local dream_path = ini:r_string(rd_sect, "dream")
+							local prob = def_regular_probability
+							local tp = def_regular_type
+
+							if ini:line_exist(rd_sect, "probability") then
+								local p = ini:r_float(rd_sect, "probability")
+								if p >= 0 then
+									prob = p
+								end
+							end
+
+							if ini:line_exist(rd_sect, "type") then
+								local t = ini:r_float(rd_sect, "type")
+								if self.dream_types[t] == 1 then
+									tp = t
+								end
+							end
+
+							self.regular[rd_sect] = {dream_path, prob, tp}
+						else
+							--log("dream <error>: can't find field <dream> in section [%s].", rd_sect)
+						end
+					else
+						--log("dream <error>: can't find section [%s] defined in the field <regular> in section [dreams].", rd_sect)
+					end
+				end
+			end
+		else
+			--log("dream <error>: can't find field <regular> in section [dreams].")
+		end
+
+		if ini:line_exist("dreams", "scenario") then
+			self.scenario = {}
+			local sd_str = ini:r_string("dreams", "scenario")
+
+			if sd_str then
+				for sd_sect in string.gfind(sd_str, "([%w_]+)") do
+					if ini:section_exist(sd_sect) then
+						if ini:line_exist(sd_sect, "dream") then
+							local dream_path = ini:r_string(sd_sect, "dream")
+
+							if ini:line_exist(sd_sect, "cond") then
+								local cond = xr_logic.cfg_get_condlist(ini, sd_sect, "cond", self)
+								local to_regular = nil
+
+								if ini:line_exist(sd_sect, "to_regular") then
+									local prob = def_regular_probability
+									local tp = def_regular_type
+									local tr = ini:r_string(sd_sect, "to_regular")
+									local at, to, p, t = string.find(tr, "(%d+),(%w+)")
+									p = tonumber(p)
+									if p then
+										prob = p
+									end
+									if self.dream_types[t] == 1 then
+										tp = t
+									end
+									to_regular = {prob, tp}
+								end
+
+								self.scenario[sd_sect] = {dream_path, cond, to_regular}
+							else
+								--log("dream <error>: can't find field <cond> in section [%s].", sd_sect)
+							end
+						else
+							--log("dream <error>: can't find field <dream> in section [%s].", sd_sect)
+						end
+					else
+						--log("dream <error>: can't find section [%s] defined in the field <scenario> in section [dreams].", sd_sect)
+					end
+				end
+			end
+		else
+			--log("dream <error>: can't find field <scenario> in section [dreams].")
+		end
+	else
+		--log("dream <error>: can't find section [dreams].")
+	end
+
+	--log("dream <init>: END INITIALIZATION")
+end
+
+function CDream:get_dream()
+	local k, v
+	local dream = nil
+
+	for k, v in pairs(self.scenario) do
+		local c = xr_logic.pick_section_from_condlist(self, v[2].condlist)
+		--log("dream <sleep>: dream(%s) cond(%s)", k, tostring(c))
+		if c == "true" or c == "" then
+			dream = k
+			--log("dream <sleep>: take")
+			break
+		end
+	end
+
+	if not dream then -- check regular dream
+		local rval = math.random(100)
+		local rp = self.regular_probability
+
+		if rval < rp and self.dream_types[self.type] then
+			local prob_power = 0
+
+			for k, v in pairs(self.regular) do
+				if self.type == "all" or self.type == v[3] then
+					prob_power = prob_power + v[2]
+				end
+			end
+
+			if prob_power > 0 then
+				local cur_prob = 0
+
+				rval = math.random(prob_power)
+				for k, v in pairs(self.regular) do
+					if self.type == "all" or self.type == v[3] then
+						if rval <  cur_prob + v[2] then
+							return v[1]
+						else
+							cur_prob = cur_prob + v[2]
+						end
+					end
+				end
+			end
+		end
+	else
+		v = self.scenario[dream]
+		if v[3] then -- put this dream into regular
+			self.regular[dream] = {v[1], v[3][1], v[3][2]}
+			self.scenario[dream] = nil
+		end
+		return v[1]
+	end
+
+	return "without_dream" -- no dreams
+end
+
+function CDream:hp_corrector(scale)
+	if scale then
+		self.hp = math.min(scale/6 + db.actor.health, 1)
+	elseif db.actor.health > self.hp then
+		db.actor.health = self.hp - db.actor.health
+	end
+end
+
+-- Пока оформил как функцию, на всякий случай
+function CDream:is_sleep_active()
+	return self.actor_is_sleeping
+end
+
+-- Для вызовов из xml-секций снов
+function after_time_scaling()
+	_G.Dream:dreamer()
+end
+function after_dream()
+	_G.Dream:stopper()
+end

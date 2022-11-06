@@ -1,0 +1,308 @@
+-- Инвентарь ГГ
+-- Refactored by RanHum
+class "CInventory"
+
+function CInventory:__init()
+	self.need_update_ruck = true
+	self.need_update = true -- !!!! Не стал менять на need_update_belt, чтобы не надо было менять имя в других скриптах
+
+	self.sack = {}				-- Инвентарь ГГ
+	self.good = {}				-- Исправное оружие/броня ГГ
+
+	self.inventory_open = false
+
+	-- Проверка на иммунитеты и удаление с пояса лишних артов
+	self.imm_limits = {100, 86, 73, 60}
+	for k, v in ipairs(self.imm_limits) do
+		self.imm_limits[k] = math.round(v/100, 2)
+	end
+	self.imm_names = {
+		[0] = "ui_inv_outfit_burn_protection",
+		[1] = "ui_inv_outfit_shock_protection",
+		[2] = "ui_inv_outfit_strike_protection",
+		[3] = "ui_inv_outfit_wound_protection",
+		[4] = "ui_inv_outfit_radiation_protection",
+		[5] = "ui_inv_outfit_telepatic_protection",
+		[6] = "ui_inv_outfit_chemical_burn_protection",
+		[7] = "ui_inv_outfit_explosion_protection",
+		[8] = "ui_inv_outfit_fire_wound_protection",
+		[10]= "ui_inv_outfit_dummy_protection"
+	}
+end
+
+-- Имеем ли предметы?
+function CInventory:has(sect, count)
+	if self.sack[sect] then
+		return self.sack[sect] >= (count or 1)
+	else
+		return false
+	end
+end
+
+-- Имеем ли исправные предметы?
+function CInventory:has_good(sect, count)
+	if self.good[sect] then
+		return self.good[sect] >= (count or 1)
+	else
+		return false
+	end
+end
+
+-- Получаем предметы
+function CInventory:got(sect, count)
+	if not count then count = 1 end
+
+	for i = 1, count do
+		create(sect,xyz(0,0,0),0,0,0)
+	end
+	news_manager.relocate_item("in", sect, count)
+end
+
+-- Теряем предметы
+function CInventory:lost(sect, count)
+	if not count then count = 1 end
+
+	local cnt = 0
+	db.actor:iterate_inventory(function(dummy, item)
+		if item:section() == sect and cnt < count then
+			release(item)
+			cnt = cnt + 1
+		end
+	end)
+	-- !!!! Здесь и в следующей ф-ии заменил count на cnt во имя отлова багов, на всякий случай, ибо в норме эти числа равны, но cnt показывает реальное число удаленных, вне зависимости от форс-мажоров
+	news_manager.relocate_item("out", sect, cnt)
+end
+
+-- Теряем исправные предметы
+function CInventory:lost_good(sect, count)
+	if not count then count = 1 end
+
+	local cnt = 0
+	db.actor:iterate_inventory(function(dummy, item)
+		if item:section() == sect and cnt < count and item:condition() > 0.95 then
+			release(item)
+			cnt = cnt + 1
+		end
+	end)
+	news_manager.relocate_item("out", sect, cnt)
+end
+
+-- Теряем все предметы
+function CInventory:lost_all(sect)
+	local count = 0
+	db.actor:iterate_inventory(function(dummy, item)
+		if item:section() == sect then
+			release(item)
+			count = count + 1
+		end
+	end)
+	if count > 0 then
+		news_manager.relocate_item("out", sect, count)
+	end
+end
+
+-- Передаем один предмет
+function CInventory:transfer(victim, sect, type)
+	if type == "in" then
+		victim:transfer_item(victim:object(sect), db.actor)
+	elseif type == "out" then
+		db.actor:transfer_item(db.actor:object(sect), victim)
+	end
+	news_manager.relocate_item(type, sect)
+end
+
+function CInventory:update()
+	if has_info("paused_on_load") then return end
+
+	-- Проверяем пояс
+	if self.need_update then
+		if not db.actor:object("af_invul") then
+			if db.actor:item_in_belt("af_zvezda_proroka2") or db.actor:item_in_belt("af_zvezda_proroka3") then
+				self.imm_limit = 1.0
+			else
+				self.imm_limit = self.imm_limits[level.get_game_difficulty()+1]
+			end
+			self:total_check_immunities()
+		end
+
+		-- Не забыть, что другие скрипты используют need_update для артов!
+		self.need_update = false
+	end
+
+	-- Проверяем рюкзак на исправные предметы
+	if self.need_update_ruck then
+		self.good = {} -- Сбрасываем таблицу перед заполнением
+
+		-- Перебираем рюкзак без слотов и пояса
+		db.actor:iterate_ruck(function(item)
+			self.section = item:section()
+
+			if condition_item(self.section) and item:condition() > 0.95 then	-- Максимальный износ, при котором предмет считается исправным
+				table.add(self.good, self.section)
+			end
+		end)
+
+		-- Слоты, в которых нужно посмотреть
+		slots = {
+			db.actor:item_in_slot(inventory_slots.OUTFIT),
+			db.actor:item_in_slot(inventory_slots.KNIFE),
+			db.actor:item_in_slot(inventory_slots.PISTOL),
+			db.actor:item_in_slot(inventory_slots.RIFLE),
+			db.actor:item_in_slot(inventory_slots.SHOTGUN)
+		}
+		-- Перебираем слоты
+		for _, slot in pairs(slots) do
+			if slot and slot:condition() > 0.95 then	-- Максимальный износ, при котором предмет считается исправным
+				table.add(self.good, slot:section()) -- Проверка на кондишн-класс убрана, т.к. в этих слотах либо ничего, либо такой класс
+			end
+		end
+
+		--print_table(self.good)
+	end
+end
+
+-- Определение наличия предмета в одном из слотов - нужно только для полноты интерфейса класса
+function CInventory:slot_item(item)
+	return db.actor:item_in_slot(item)
+end
+
+-- Калбек на поднятие предмета
+function CInventory:on_item_take(item)
+	table.add(self.sack, item:section())
+
+	if condition_item(item:section()) and not self.inventory_open then
+		self.need_update_ruck = true
+	end
+end
+
+-- Калбек на потерю предмета
+function CInventory:on_item_drop(item)
+	table.sub(self.sack, item:section())
+
+	if item:is_artefact() then
+		self.need_update = true -- !!!! Исключительно ради корректной обработки событий удаления артов прямо с пояса, вроде вырождений и передачи по заданиям
+	elseif condition_item(item:section()) and not self.inventory_open then
+		self.need_update_ruck = true
+	end
+end
+
+-- Калбек на надевание на пояс
+function CInventory:on_item_to_belt(item)
+	if item and item:is_artefact() then
+		self.need_update = true
+
+		-- Проверка на Идол Монолита
+		if item:section() == "af_idol_monolita" and has_info("snp_shadows_start") then
+			level.set_weather("grey",true)
+		end
+	end
+end
+
+-- Калбек на снятие с пояса
+function CInventory:on_item_from_belt(item)
+	if item and item:is_artefact() then
+		self.need_update = true
+	end
+end
+
+-- Открытие/закрытие инвентаря
+function CInventory:on_inventory_info(info)
+	if info == "ui_inventory" then
+		self.inventory_open = true
+	elseif info == "ui_inventory_hide" then
+		self.inventory_open = false
+		self.need_update_ruck = true
+	end
+end
+
+-- Полное приведение пояса в порядок с текущими лимитами
+function CInventory:total_check_immunities()
+	-- Проверяем иммунитеты
+	self.bad_imm = self:bad_immunity_index()
+
+	-- Сразу выходим, если все в порядке
+	if not self.bad_imm then return end
+
+	-- Есть перебор в иммунитете - заполняем таблицу артов
+	self.belt = {}
+	db.actor:iterate_belt(function(item)
+		if item:is_artefact() then
+			table.insert(self.belt, {item, item:get_immunities()})
+		end
+	end)
+
+	-- Пока не добьемся соблюдения иммунитетов
+	while self.bad_imm do
+		-- Сортировка по проблемному иммунитету по возрастанию
+		table.sort(self.belt, function (art1, art2)
+			return (art1[2][self.bad_imm] or 0) < (art2[2][self.bad_imm] or 0)
+		end)
+
+		for i = #self.belt, 1, -1 do
+			-- Удалим арт из таблицы и запишем его объект
+			local obj = table.remove(self.belt)[1]
+
+			-- Известим игрока
+			sms("Для текущего уровня сложности создаваемый артефактами имммунитет "..game.translate_string(self.imm_names[self.bad_imm]).." не должен превышать "..tostring(math.round(self.imm_limit*100)).."%. Артефакт "..game.translate_string(amk.get_inv_name(obj:section())).." убран с пояса.", nil, "nano", 20000)
+
+			-- Пошлем арт в рюкзак и проверим результат
+			if not db.actor:inventory_move_item(obj, inventory_slots.RUCK, false) then
+				-- Если по неведомой причине что-то пошло не так (ну, мало ли), принудительно снимем арт
+				log("<inventory.script>: db.actor:inventory_move_item FAIL (obj_name = '%s'), force move to ruck", obj:name())
+				self.section = obj:section()
+				release(obj)
+				got_item(self.section)
+			end
+
+			-- Если уже нет проблемы с этим иммунитетом, прерываем цикл удаления
+			if self.bad_imm ~= self:bad_immunity_index() then break	end
+		end
+
+		-- Перепроверим иммунитеты
+		self.bad_imm = self:bad_immunity_index()
+	end
+end
+
+-- Индекс проблемного иммунитета ГГ
+function CInventory:bad_immunity_index()
+	for immIndex, immValue in ipairs(db.actor:get_immunities_from_belt()) do
+		if immValue > self.imm_limit then
+			return immIndex
+		end
+	end
+	return nil
+end
+
+-- предмет на поясе
+function CInventory:on_belt(sect)
+	return db.actor:item_in_belt(sect)
+end
+
+function CInventory:on_belt_by_id(sect)
+	return db.actor:item_in_belt(sect)
+end
+
+function CInventory:count_items_on_belt()
+	self.count = 0
+	db.actor:iterate_belt(function(obj)
+		self.count = self.count + 1
+	end)
+	return self.count
+end
+
+function CInventory:get_free_belt_slot()
+	if self:count_items_on_belt() == config:r_u32("inventory", "max_belt") then
+		self.free_belt_slot = false
+
+		db.actor:iterate_belt(function(obj)
+			self.section = obj:section()
+			if not self.free_belt_slot
+			and obj:is_artefact()
+			and self.section ~= "af_invul"
+			and self.section ~= "runner_tele" then
+				db.actor:inventory_move_item(obj, inventory_slots.RUCK, false)
+				self.free_belt_slot = true
+			end
+		end)
+	end
+end

@@ -1,0 +1,56 @@
+-- Перепаковщик патронов
+-- Refactored and optimized by Ranhum
+
+local ammo = {}
+
+-- Инициализация переменных из bind_actor.net_spawn
+function init()
+	-- Список патронов возьмём из "loot.ltx"
+	utils.iterate_ini_lines(ini_file("misc\\loot.ltx"), "ammo_sections", function(result, section)
+		ammo[section] = {box_size = config:r_u32(section, "box_size")} -- Читаем размеры полных пачек
+	end)
+	make_ammo_update() -- Начальное обновление реестра
+end
+
+-- Полное обновление реестра патронов
+function make_ammo_update()
+	for section in pairs(ammo) do
+		ammo[section].parts = {}
+	end
+	ammo.repack = {}
+	db.actor:iterate_inventory_simple(on_take, db.actor)
+end
+
+-- Вызывается в итераторе, обновляя реестр патронов, или просто из калбека взятия предмета
+function on_take(obj)
+	local section = obj:section()
+	if ammo[section] then -- Если это патрон
+		local obj_id = obj:id()
+		local ammo_size = safe_utils.GetAmmoSizeById(obj_id)
+		if ammo_size < ammo[section].box_size then -- Если пачка неполна
+			if #ammo[section].parts == 1 then
+				-- Если эта секция уже имеет неполную пачку (если больше, то мы это уже посчитали)
+				table.insert(ammo.repack, section) -- Внесем в список на перепаковку
+			end
+			table.insert(ammo[section].parts, {obj_id, ammo_size}) -- Вносим в реестр данные пачки
+		end
+	end
+end
+
+-- Вызывается из bind_actor.update каждые пять секунд
+function on_update()
+	if #ammo.repack > 0 then -- Если с последнего апдейта что-то нехорошее произошло
+		make_ammo_update() -- Обновляем, нам нужны свежие данные
+		local section, total_ammo, data
+		for i = #ammo.repack, 1, -1 do -- По каждому проблемному патрону
+			section = table.remove(ammo.repack) -- Берем его секцию
+			total_ammo = 0 -- Обнуляем текущее количество патронов в нецелых пачках секции
+			for j = #ammo[section].parts, 1, -1 do -- Для каждой частичной пачки этого патрона
+				data = table.remove(ammo[section].parts) -- Берем ее данные
+				total_ammo = total_ammo + data[2] -- Обновляем текущее количество патронов в нецелых пачках секции
+				release(data[1]) -- Удаляем пачку, больше не нужна
+			end
+			amk.spawn_ammo_in_inv(section, total_ammo) -- Собственно, спавним патроны в нужном кол-ве
+		end
+	end
+end

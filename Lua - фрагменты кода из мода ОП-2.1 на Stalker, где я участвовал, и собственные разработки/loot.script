@@ -1,0 +1,349 @@
+-------------------------------
+--  Loot manager for OP-2.1  --
+--      Made by RanHum       --
+-------------------------------
+
+class "CLoot"
+
+function CLoot:__init()
+	-- Файлы конфигов
+	local loot_ini = ini_file("misc\\loot.ltx")
+
+	-- Глобальный ребаланс дополнительно к конфигу. Состояние всей экипировки += этот % !!!! Удалить коммент перед релизом
+	self.global_rebalance_cond = -15
+	-- Глобальный ребаланс дополнительно к конфигу. Вероятность выпадения лута умножается на это число. Для патронов это и есть вероятность выпадения !!!! Удалить коммент перед релизом
+	self.global_rebalance_loot = 0.9
+
+	-- Основные таблицы
+	self.npc_loot = {}
+	self.box_loot = {}
+
+	-- Определяем секцию уровня
+	self.level_name = level.name()
+
+	-- Парсим таблицу зависимостей состояния оружия и брони (а также вероятности ее спавна) от группировки
+	self.equipment = {}
+	local _v
+	utils.iterate_ini_lines(loot_ini, "equipment_by_community", function(result, comm, values)
+		_v = parse_nums(values)
+		self.equipment[comm] = {
+			outfit_prob	= _v[1]/100,
+			min_cond	= _v[2],
+			max_cond	= _v[3]
+		}
+	end)
+
+	local box_types = {
+		def_box				= true,
+		small_box_generic	= true,
+		small_box_ussr		= true,
+		small_box_nato		= true,
+		small_box_army		= true,
+		small_box_science	= true,
+		big_box_generic		= true,
+		big_box_dungeons	= true,
+		big_box_arsenal		= true
+	}
+
+	-- Вычитываем таблицы зависимостей для нпс и коробок
+	self:Init_factors("misc\\loot.ltx",		"npc_loot", self.equipment)
+	self:Init_factors("misc\\loot_box.ltx",	"box_loot", box_types)
+
+	-- Вероятность сохранения предмета у непися
+	self.keep_items_prob = {}
+	utils.iterate_ini_lines(loot_ini, "keep_items_prob", function(result, item, prob)
+		self.keep_items_prob[item] = tonumber(prob)
+	end)
+
+	-- Инфопоршни в случае смерти
+	self.npc_names_info = {}
+	utils.iterate_ini_lines(loot_ini, "npc_names_info", function(result, name, info)
+		self.npc_names_info[name] = info
+	end)
+
+	-- Уникальные стволы, которые не разряжаются и всегда должны быть исправны
+	self.unique_wpn = {}
+	utils.iterate_ini_lines(loot_ini, "unique_wpn", function(result, wpn)
+		self.unique_wpn[wpn] = true
+	end)
+
+	-- Письма
+	self.letters = {}
+	utils.iterate_ini_lines(loot_ini, "letters", function(result, n, comm)
+		self.letters[tonumber(n)] = comm
+	end)
+
+	-- Колода Кузнецова
+	self.cards = {}
+	utils.iterate_ini_lines(loot_ini, "kuznec_cards", function(result, card)
+		table.insert(self.cards, card)
+	end)
+
+	-- Рандомайзер позиции для спавна предметов коробки
+	self.pos = function(obj)
+		local obj_p = obj:position()
+		local p = vector():set(0,0,0)
+		p.x = obj_p.x - 0.3 + 0.6 * math.random()
+		p.z = obj_p.z - 0.3 + 0.6 * math.random()
+		p.y = obj_p.y + 0.3 + 0.2 * math.random()
+		return p
+	end
+end
+
+-- Вычитка таблиц зависимостей от: сложности, уровня и группировки/типа в нужную таблицу
+function CLoot:Init_factors(ini_name, loot_table, comms)
+		-- Файлы конфигов
+	local loot_ini = ini_file(ini_name)
+
+	-- Парсим таблицы для сложности. Поскольку сложность может смениться, парсим сразу все. Не будем вычитывать таблицы заново при смене сложности, лишние проблемы
+	local _v
+	for diff = 0, 3 do
+		utils.iterate_ini_lines(loot_ini, "loot_count_"..diff, function(result, item, values)
+			-- Поскольку мы формируем главную таблицу по таблицам сложности (они наиболее полные), проверяем на наличие ключа
+			if not self[loot_table][item] then
+				self[loot_table][item] = {difficulty = {}, communities = {}}
+			end
+			-- Присваиваем необходимые значения
+			_v  = parse_nums(values)
+			self[loot_table][item].difficulty[diff] = {
+				min = tonumber(_v[1]),
+				max = tonumber(_v[2] or _v[1])
+			}
+		end)
+	end
+
+	-- Парсим таблицы зависимостей встречаемости предметов от группировки/типа ящика
+	for comm in pairs(comms) do
+		if loot_ini:section_exist(comm) then
+			utils.iterate_ini_lines(loot_ini, comm, function(result, item, prob)
+				self[loot_table][item].communities[comm] = tonumber(prob)
+			end)
+		else
+			log("<Loot manager init> Missed [%s] type section in \"%s\"! All values are default!", comm, ini_name)
+		end
+	end
+
+	-- Множители для выпадения вещей в зависимости от уровня, если есть его секция
+	if loot_ini:section_exist(self.level_name) then
+		utils.iterate_ini_lines(loot_ini, self.level_name, function(result, item, factor)
+			self[loot_table][item].level_factor = tonumber(factor)
+		end)
+	else
+		log("<Loot manager init> Missed [%s] level section in \"%s\"! All values are default!", self.level_name, ini_name)
+	end
+end
+
+-- Вызывается при смерти нпс
+function CLoot:Loot_npc(npc)
+	self.npc = npc
+	if not self.npc then return false end
+	local se_npc = server_object(self.npc:id())
+	-- Спрашиваем у серверного объекта, был ли заспавнен лут
+	if not se_npc or se_npc.death_droped then return true end
+	se_npc.death_droped = true
+
+	local community = self.npc:character_community()
+	local npc_name = protected_items.get_obj_name(self.npc)
+	local diff = level.get_game_difficulty()
+	local equip_data = self.equipment[community] or self.equipment.default
+	local cond_add = 5 * (3 - diff) + self.global_rebalance_cond
+	self.spawn_ini = self.npc:spawn_ini()
+
+	self.condition = function() return math.random(equip_data.min_cond, equip_data.max_cond) + cond_add end
+
+	self.ammos = {}
+
+	log("npc [%s]", npc_name)
+
+	-- Просматриваем инвентарь нпс, удаляем лишние предметы, разряжаем и присваиваем нужное состояние оружию по таймерам, записываем виды патронов
+	self.npc:iterate_inventory_simple(proceed_item, self.npc)
+
+	-- Выдача ифнопоршней, если есть
+	local info = self.npc_names_info[npc_name]
+	if info and dont_has_info(info) then
+		give_info(info)
+	end
+
+	-- Проверка на отсутствие спауна лута
+	if self.spawn_ini and self.spawn_ini:section_exist("dont_spawn_loot") then return true end
+
+	-- Спавним весь лут, помимо того, что был оставлен у нпс функцией proceed_item, кроме брони, карт и писем
+	local lvl_factor, diff_counts, number, prob, ammo_count
+	for item, data in pairs(self.npc_loot) do
+		lvl_factor = data.level_factor or 0 -- Встречаемость предмета на уровне, или 0, если нет его секции
+		diff_counts = data.difficulty[diff] -- Кол-во предметов для спавна для текущего уровня сложности
+		-- math.random с дробными значениями будет округлять каждое из своих аргументов
+		number = math.random(lvl_factor * diff_counts.min, lvl_factor * diff_counts.max) -- Количество попыток заспавнить предмет с вероятностью prob / количество патронов для каждой попытки
+		if number > 0 then
+			if string.find(item, "ammo_") then -- Если патроны на очереди
+				ammo_count = self.ammos[item]
+				if ammo_count then
+					for i = 1, ammo_count do
+						if math.random() <= self.global_rebalance_loot then
+							amk.spawn_ammo_in_inv(item, number, self.npc)
+						end
+					end
+				end
+			else -- Если другие предметы на очереди
+				prob = (data.communities[community] or 0) * self.global_rebalance_loot -- Вероятность заспавнить один предмет
+				--log("sect[%s], lvl[%f], number[%i] {%i, %i}, comm prob [%f], total prob [%f]", item, lvl_factor, number, diff_counts.min, diff_counts.max, data.communities[community] or 0, prob)
+				for i = 1, number do
+					if math.random() <= prob then
+						amk.spawn_item_in_inv(item, self.npc)
+					end
+				end
+			end
+		end
+	end
+
+	-- Спавн брони, если доступно
+	if not string.find(self.npc:section(), "arena")
+	and community ~= "arena_enemy"
+	and npc_name ~= "yan_specnaz_dead"
+	and npc_name ~= "x16_stalker_ghost"
+	then
+		local vis = self.npc:get_visual_name()
+		if vis then
+			local sect = xrs_armor.get_suit_sect(vis, npc_name) -- Секцию броника получаем в xrs_armor
+			if sect then
+				if math.random() <= equip_data.outfit_prob * self.global_rebalance_loot then -- Вероятность заспавнить броню
+					local outfit = amk.spawn_item_in_inv(sect, self.npc)
+					amk.start_timer("item_cond", 1, {outfit.id, self.condition()})
+				end
+			end
+		end
+	end
+
+	-- Даем письмо и карту всем, кроме вермахта
+	if community ~= "vermaht" then
+		self:give_letter(community)
+		self:give_card()
+	end
+	return true
+end
+
+-- Итератор на удаление лишних предметов, разрядку и состояние оружия, запись и чистку патронов
+function proceed_item(item)
+	local self = _G.Loot
+	local section, item_id, cnd, prob
+	section = item:section()
+	item_id = item:id()
+	prob = self.keep_items_prob[section]
+	log("npc obj with id = %i is [%s]", item_id, section)
+	if prob and not (prob == 1) and ((prob == 0) or (math.random() > prob)) then -- Если нужно просто удалить предмет
+		release(item_id)
+	elseif string.find(section, "wpn_") then -- Если это оружие
+		for _, ammo in pairs(string.explode(config:r_string(section, "ammo_class"), ",", true)) do
+			table.add(self.ammos, ammo) -- Наполняем таблицу патронами под это оружие
+		end
+		if not self.unique_wpn[item:section()] then -- Если это не особое оружие
+			if isMagazinedWeapon(item) then
+				--item:unload_magazine()
+				amk.start_timer("unload_wpn_time", 1, item_id)
+			end
+			cnd = self.spawn_ini and self.spawn_ini:section_exist("totally_broken_weapon") and 0.01 or self.condition()/100
+			if item:condition() > cnd then
+				--item:set_condition(cnd)
+				amk.start_timer("item_cond", 1, {item_id, cnd * 100})
+			end
+		end
+	elseif string.find(section, "ammo_") then -- Если это патроны
+		table.add(self.ammos, item)
+		release(item_id)-- Чистим патроны, чтобы их кол-во было четко определено нашими формулами
+	end
+end
+
+-- Вызывается при разрушении коробок
+function CLoot:Loot_box(obj)
+	self.spawn_ini = obj:spawn_ini()
+	if self.spawn_ini:line_exist("drop_box", "items") then -- Если есть переопределение лута
+		local items, prev, p = {}
+		for value in string.gfind(self.spawn_ini:r_string("drop_box", "items"), "([%w_%-.\\]+)%p*") do
+			p = tonumber(value)
+			if p then
+				items[prev] = p
+			else
+				items[value] = 1
+				prev = value
+			end
+		end
+		for item, number in pairs(items) do
+			--log("create %i of %s", number, item)
+			for i = 1, number do
+				create(item, self.pos(obj), obj:level_vertex_id(), obj:game_vertex_id())
+			end
+		end
+		return
+	end
+
+	local diff = level.get_game_difficulty()
+	local community = utils.cfg_get_string(self.spawn_ini, "drop_box", "community", obj, false, "", "def_box")
+
+	-- Спавним случайный лут
+	local lvl_factor, diff_counts, number, prob
+	for item, data in pairs(self.box_loot) do
+		prob = data.communities[community] or 0 -- Вероятность заспавнить один предмет
+		lvl_factor = data.level_factor or 0 -- Встречаемость предмета на уровне, или 0, если нет его секции
+		if prob > 0 and lvl_factor > 0 then
+			diff_counts = data.difficulty[diff] -- Кол-во предметов для спавна для текущего уровня сложности
+			-- math.random с дробными значениями будет округлять каждое из своих аргументов
+			number = math.random(lvl_factor * diff_counts.min, lvl_factor * diff_counts.max) -- Количество попыток заспавнить предмет с вероятностью prob / количество патронов для каждой попытки
+			--log("sect[%s], lvl[%f], number[%i] {%i, %i}, comm prob [%f], total prob [%f]", item, lvl_factor, number, diff_counts.min, diff_counts.max, data.communities[community], prob)
+			if number > 0 then
+				if string.find(item, "ammo_") then -- Если патроны на очереди
+					if math.random() <= prob then
+						se_respawn.create_ammo(item, self.pos(obj), obj:level_vertex_id(), obj:game_vertex_id(), 65535, number)
+					end
+				else -- Если другие предметы на очереди
+					for i = 1, number do
+						if math.random() <= prob then
+							create(item, self.pos(obj), obj:level_vertex_id(), obj:game_vertex_id())
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+-- Письма
+function CLoot:give_letter(community)
+	if math.random() <= 0.003 then -- Вероятность выдачи
+		local avail_letters = {}
+
+		for n, com in pairs(self.letters) do
+			if dont_has_info("letter_"..n) and (com == "" or string.find(com, community)) then
+				table.insert(avail_letters, n)
+			end
+		end
+
+		if #avail_letters > 0 then
+			give_info("letter_" .. table.random(avail_letters))
+			amk.spawn_item_in_inv("letter", self.npc)
+		end
+	end
+end
+
+-- Карты
+function CLoot:give_card()
+	if math.random() <= 0.003 then -- Вероятность выдачи
+		local avail_cards = {}
+
+		for _, card in pairs(self.cards) do
+			if dont_has_info(card) then
+				table.insert(avail_cards, card)
+			end
+		end
+
+		if #avail_cards > 0 then
+			amk.spawn_item_in_inv(table.random(avail_cards), self.npc)
+		end
+	end
+end
+
+function checking_taken_item90(obj)
+	local section = obj:section()
+	if _G.Loot.cards[section] then
+		give_info(section)
+	end
+end

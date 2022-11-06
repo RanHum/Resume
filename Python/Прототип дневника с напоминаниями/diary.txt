@@ -1,0 +1,12 @@
+$$print_tags = True
+$$maxlevel = 1
+$$hello = >
+$days: su,mo,tu,we,th,fr,sa
+##time pair
+
+<@name 1
+description 1
+#su mo tu
+>@name 2
+description 2
+#mo tu we days

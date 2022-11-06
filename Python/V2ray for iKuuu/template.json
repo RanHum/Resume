@@ -1,0 +1,40 @@
+{
+	"log": {
+		"access": "",
+		"error": "",
+		"loglevel": "info"
+	},
+	"inbounds": [
+		{
+			"tag": "shadowsocks-in",
+			"port": 8080,
+			"listen": "::",
+			"protocol": "shadowsocks",
+			"settings": {
+				"method": "aes-128-gcm",
+				"password": "password"
+			}
+		}
+	],
+	"outbounds": [
+
+	],
+	 "routing": {
+		"domainStrategy": "AsIs",
+		"balancers": [
+			{
+				"tag": "proxy",
+				"selector": [
+				"proxy"
+				]
+			}
+		],
+		"rules": [
+			{
+				"type": "field",
+				"inboundTag": "shadowsocks-in",
+				"balancerTag": "proxy"
+			}
+		]
+	}
+}

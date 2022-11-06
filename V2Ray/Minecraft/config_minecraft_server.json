@@ -1,0 +1,64 @@
+// Server
+
+{
+    "log": {
+    "loglevel": "warning",
+    "access":   "server_access.log",
+    "error":    "server_error.log"
+    },
+    "inbounds": [
+      {
+            "port": "9000",
+            "listen": "0.0.0.0",
+            "protocol": "vmess",
+            "settings": {
+                "clients": [
+                    {
+                        "id": "078959b8-4fec-4821-b43e-04a44f0b82e2",
+                        "level": 0,
+                        "alterId": 32
+                    }
+                ]
+            },
+            "allocate": {
+                "strategy": "always",
+                "refresh": 5,
+                "concurrency": 1
+            },
+            "streamSettings": {
+                  "network": "kcp",
+                  "security": "none",
+                  "kcpSettings": {
+                        "mtu": 1350,
+                        "tti": 50,
+                        "uplinkCapacity": 3,
+                        "downlinkCapacity": 3,
+                        "congestion": true,
+                        "readBufferSize": 2,
+                        "writeBufferSize": 2,
+                        "header": {
+                            "type": "utp"
+                        }
+                  }
+            }
+      }],
+    "outbounds": [{
+        "protocol": "freedom",
+        "settings": {
+            "redirect": ":25565"
+        }
+    }],
+    "policy": {
+        "levels": {
+            "0": {
+                "handshake"         : 4,
+                "connIdle"          : 300,
+                "uplinkOnly"        : 5,
+                "downlinkOnly"      : 5,
+                "statsUserUplink"   : false,
+                "statsUserDownlink" : false,
+                "bufferSize"        : 1024
+            }
+        }
+    }
+}
